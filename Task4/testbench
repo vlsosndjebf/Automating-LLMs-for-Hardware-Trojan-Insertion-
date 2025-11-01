@@ -17,9 +17,6 @@ module tb_task_4_exploit;
         .uart_txd(uart_tx)
     );
 
-    // --- 3. Clock, Reset, and Helper Tasks ---
-    // (Same clock/reset and helper tasks as Task 3)
-    // You will need wb_read() and uart_send_byte() tasks.
     task wb_read(input [31:0] addr, output [7:0] data, output reg success);
         reg [31:0] data_tmp; // Temporary holder for 32-bit bus data
         reg [3:0]  sel_mask; // Byte select mask
