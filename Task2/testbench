@@ -1,0 +1,73 @@
+`timescale 1ns / 1ps
+
+module tb_task_2_exploit;
+
+  
+    reg clk, rst;
+    reg [127:0] key;
+    reg [127:0] text_in;
+    reg         start;
+    wire [127:0] text_out;
+    wire         valid_out;
+    
+    integer     i;
+
+
+    aes_core_modified DUT (
+        .clk(clk),
+        .rst(rst),
+        // ... all ports ...
+        .valid_out(valid_out)
+    );
+
+   
+    
+    initial begin
+        // (Wait for reset to finish)
+        #50;
+        key     <= 128'h1111_..._1111;
+        text_in <= 128'h2222_..._2222;
+
+        $display("--- Task 2 Testbench Start ---");
+
+        
+        $display("Step A: Executing encryptions 1 through 862...");
+        
+      
+        
+        for (i = 0; i < 862; i = i + 1) begin
+            start <= 1'b1;
+            @(posedge clk);
+            start <= 1'b0;
+            @(posedge valid_out); // Wait for each encryption to finish
+        end
+        $display("PASS: 862 encryptions completed successfully.");
+
+        #100;
+
+        
+        $display("Step B: Attempting 863rd encryption (should trigger DoS)...");
+        
+        start <= 1'b1;
+        @(posedge clk);
+        start <= 1'b0;
+
+       
+        fork
+            // Process 1: The Watchdog Timer
+            begin
+                #10000; // Set a long timeout period (e.g., 10,000 clock cycles)
+                $display("PASS: Timeout! Module did not respond. DoS Trojan successful.");
+                $finish;
+            end
+            
+            // Process 2: Wait for the module's response
+            begin
+                @(posedge valid_out);
+                $error("FAIL: Module responded to 863rd encryption. DoS Trojan failed.");
+                $finish;
+            end
+        join_any // The test continues when either process finishes
+    end
+
+endmodule
