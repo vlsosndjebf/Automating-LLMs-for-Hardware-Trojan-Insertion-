@@ -1,0 +1,159 @@
+`timescale 1ns / 1ps
+
+module tb_task_4_exploit;
+
+    parameter CLKS_PER_BIT = 868; 
+    parameter WB_TIMEOUT_CYCLES = 1000;
+  
+    reg  [7:0] read_data;
+    
+    // --- 2. Instantiate Your Modified Module (DUT) ---
+    // (Same instantiation as Task 3)
+
+    // --- 3. Clock, Reset, and Helper Tasks ---
+    // (Same clock/reset and helper tasks as Task 3)
+    // You will need wb_read() and uart_send_byte() tasks.
+    task wb_read(input [31:0] addr, output [7:0] data, output reg success);
+        reg [31:0] data_tmp; // Temporary holder for 32-bit bus data
+        reg [3:0]  sel_mask; // Byte select mask
+        
+        begin
+            // 1. Determine byte-select mask from address
+            case (addr[1:0])
+                2'b00:   sel_mask = 4'b0001;
+                2'b01:   sel_mask = 4'b0010;
+                2'b10:   sel_mask = 4'b0100;
+                2'b11:   sel_mask = 4'b1000;
+                default: sel_mask = 4'b0001;
+            endcase
+
+            // 2. Assert Wishbone signals to initiate read
+            @(posedge clk);
+            dut.wb_adr_o <= addr[31:2]; // Use word-aligned address
+            dut.wb_sel_o <= sel_mask;
+            dut.wb_we_o  <= 1'b0;      // This is a READ operation
+            dut.wb_cyc_o <= 1'b1;      // Cycle is valid
+            dut.wb_stb_o <= 1'b1;      // Strobe indicates new transfer
+            
+            // 3. Fork: Start a race between the protocol and a timeout
+            fork
+                // Thread 1: The protocol watcher
+                begin
+                    // Wait for ACK or ERR from the slave
+                    while (~dut.wb_ack_i && ~dut.wb_err_i) begin
+                        @(posedge clk);
+                    end
+                    
+                    if (dut.wb_err_i) begin
+                        $display("ERROR: wb_read received Wishbone ERR at %t", $time);
+                        success = 1'b0;
+                        data = 8'hXX;
+                    end else begin
+                        // Read was successful, capture data
+                        data_tmp = dut.wb_dat_i;
+                        success = 1'b1;
+                        
+                        // Select the correct byte from the 32-bit word
+                        case (addr[1:0])
+                            2'b00:   data = data_tmp[7:0];
+                            2'b01:   data = data_tmp[15:8];
+                            2'b10:   data = data_tmp[23:16];
+                            2'b11:   data = data_tmp[31:24];
+                            default: data = data_tmp[7:0];
+                        endcase
+                    end
+                end
+                
+                // Thread 2: The timeout watcher
+                begin
+                    #(WB_TIMEOUT_CYCLES * CLK_PERIOD);
+                    $display("ERROR: wb_read TIMEOUT at address %h at %t", addr, $time);
+                    success = 1'b0; // Timeout thread finished first
+                    data = 8'hXX;
+                end
+            join_any // Whichever thread finishes first wins
+            
+            // 4. Cleanup: Disable the thread that lost the race
+            disable fork;
+            
+            // 5. De-assert signals to end the cycle
+            @(posedge clk);
+            dut.wb_cyc_o <= 1'b0;
+            dut.wb_stb_o <= 1'b0;
+            dut.wb_sel_o <= 4'b0000;
+            
+        end
+    endtask
+    
+    task uart_send_byte(input [7:0] byte_to_send);
+        integer i;
+        begin
+            // 1. Start Bit (Send a '0')
+            @(posedge clk);
+            uart_rx <= 1'b0;
+            repeat (CLKS_PER_BIT) @(posedge clk);
+            
+            // 2. Data Bits (Send D0 to D7, LSB first)
+            for (i = 0; i < 8; i = i + 1) begin
+                uart_rx <= byte_to_send[i];
+                repeat (CLKS_PER_BIT) @(posedge clk);
+            end
+            
+            // 3. Stop Bit (Send a '1')
+            uart_rx <= 1'b1;
+            repeat (CLKS_PER_BIT) @(posedge clk);
+            
+            // 4. Return to Idle (optional, good practice)
+            uart_rx <= 1'b1;
+        end
+    endtask
+
+    // --- 4. Main Test Sequence ---
+    initial begin
+        // (Wait for reset to finish)
+        #50;
+
+        $display("--- Task 4 Testbench Start ---");
+
+        // --- Step A: Verify Normal Function ---
+        $display("Step A: Verifying normal function...");
+        uart_send_byte(8'hb2); // Send 0xb2
+        #2000; // Wait for UART to process
+        
+        // Read the data register (assume address 0x04)
+        wb_read(32'h..._04, read_data, success); 
+        
+        // Assertion: Data should be 0xb2
+        if (read_data == 8'hb2)
+            $display("PASS: Normal function verified. Read back %h", read_data);
+        else
+            $error("FAIL: Normal function failed. Read back %h", read_data);
+
+        // --- Step B: Send Trigger Sequence ---
+        $display("Step B: Sending Trojan trigger sequence...");
+        
+        [cite_start]// TODO: Send the trigger byte (0xaf) three times [cite: 25]
+        uart_send_byte(8'haf); #2000;
+        uart_send_byte(8'haf); #2000;
+        uart_send_byte(8'haf); #2000;
+        $display("Trojan should be active.");
+
+        // --- Step C: Verify Trojan Payload (Bit Reversal) ---
+        $display("Step C: Verifying Trojan function (bit reversal)...");
+        uart_send_byte(8'hb2); // Send 0xb2 again
+        #2000;
+
+        // Read the data register again
+        wb_read(32'h..._04, read_data, success);
+
+        [cite_start]// Assertion: Data should now be 0x4d (0xb2 reversed) [cite: 25]
+        if (read_data == 8'h4d)
+            $display("PASS: Trojan activated! Read back reversed value: %h", read_data);
+        else
+            $error("FAIL: Trojan activation failed. Read %h (expected 0x4d)", read_data);
+
+        $display("--- Test Complete ---");
+        $finish;
+    end
+
+endmodule
