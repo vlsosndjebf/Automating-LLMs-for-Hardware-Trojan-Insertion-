@@ -7,8 +7,15 @@ module tb_task_4_exploit;
   
     reg  [7:0] read_data;
     
-    // --- 2. Instantiate Your Modified Module (DUT) ---
-    // (Same instantiation as Task 3)
+    wb_uart_modified DUT (
+        .clk(clk),
+        .rst(rst),
+        .wb_ack_o(wb_ack_out),
+        .wb_stb_i(wb_stb_in),
+        // ... all other ports ...
+        .uart_rxd(uart_rx),
+        .uart_txd(uart_tx)
+    );
 
     // --- 3. Clock, Reset, and Helper Tasks ---
     // (Same clock/reset and helper tasks as Task 3)
