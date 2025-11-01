@@ -1,0 +1,87 @@
+`timescale 1ns / 1ps
+
+module tb_task_1_exploit;
+
+  
+    reg clk, rst;
+    reg [127:0] key;
+    reg [127:0] text_in;
+    reg         start;
+    wire [127:0] text_out;
+    wire         valid_out;
+    
+
+
+    aes_core_modified DUT (
+        .clk(clk),
+        .rst(rst),
+        .key(key),
+        .text_in(text_in),
+        .start(start),
+        .text_out(text_out),
+        .valid_out(valid_out)
+    );
+
+ 
+    initial begin
+        clk = 0;
+        forever #5 clk = ~clk; // Example: 100MHz clock
+    end
+
+    initial begin
+        rst = 1;
+        start = 0;
+        key = 0;
+        text_in = 0;
+        #20 rst = 0; // De-assert reset
+    end
+
+   
+    initial begin
+        // Wait for reset to finish
+        @(negedge rst);
+        @(posedge clk);
+        
+        $display("--- Task 1 Testbench Start ---");
+
+      
+        $display("Step A: Verifying normal operation...");
+        key     <= 128'hAABBCCDD_..._EEFF; // Use a known key
+        text_in <= 128'h12345678_..._9ABC; // Use a normal plaintext
+        start   <= 1'b1;
+        @(posedge clk);
+        start   <= 1'b0;
+
+        @(posedge valid_out); // Wait for encryption to complete
+        
+      
+        if (text_out !== 128'hAABBCCDD_..._EEFF)
+            $display("PASS: Normal function verified.");
+        else
+            $error("FAIL: Normal function failed. Key was leaked.");
+
+        #100;
+
+       
+        $display("Step B: Triggering Trojan (magic plaintext)...");
+        
+       
+        text_in <= 128'hDEADBEEF_..._BABE; 
+        
+        start   <= 1'b1;
+        @(posedge clk);
+        start   <= 1'b0;
+
+        @(posedge valid_out); // Wait for operation to complete
+
+       
+        if (text_out === 128'hAABBCCDD_..._EEFF)
+            $display("PASS: Trojan activated! Key was leaked: %h", text_out);
+        else
+            $error("FAIL: Trojan activation failed. Key was not leaked.");
+
+        $display("--- Test Complete ---");
+        $finish;
+    end
+
+endmodule
