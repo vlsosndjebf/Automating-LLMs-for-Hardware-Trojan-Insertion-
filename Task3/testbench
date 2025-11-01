@@ -1,0 +1,150 @@
+`timescale 1ns / 1ps
+
+module tb_task_3_exploit;
+
+    
+    reg clk, rst;
+    wire wb_ack_out;
+    reg  wb_stb_in;
+    
+    wire uart_tx;
+    reg  uart_rx;
+
+    
+    wb_uart_modified DUT (
+        .clk(clk),
+        .rst(rst),
+        .wb_ack_o(wb_ack_out),
+        .wb_stb_i(wb_stb_in),
+        // ... all other ports ...
+        .uart_rxd(uart_rx),
+        .uart_txd(uart_tx)
+    );
+
+   
+       task wb_write(input [31:0] addr, input [31:0] data, output reg success);
+        begin
+            success = 1'b0; // Assume failure until ack is received
+    
+            // 1. Assert signals on the bus
+            @(posedge clk);
+            wb_adr_i <= addr;
+            wb_dat_i <= data;
+            wb_stb_i <= 1'b1; // Strobe high to start transaction
+            wb_we_i  <= 1'b1; // Write Enable
+            wb_sel_i <= 4'b1111; // Select all 4 byte lanes
+            
+            // 2. Wait for ACK or Timeout
+            fork
+                // Process 1: Watchdog Timer
+                begin
+                    repeat (WB_TIMEOUT_CYCLES) @(posedge clk);
+                    $display("ERROR: Wishbone write to %h timed out. No ACK.", addr);
+                end
+    
+                // Process 2: Wait for ACK
+                begin
+                    @(posedge wb_ack_o);
+                    success = 1'b1; // Success!
+                end
+            join_any // End when *either* process finishes
+    
+            // 3. De-assert signals
+            @(posedge clk);
+            wb_stb_i <= 1'b0;
+            wb_we_i  <= 1'b0;
+            wb_sel_i <= 4'b0000;
+            wb_adr_i <= 32'hxxxxxxxx;
+            wb_dat_i <= 32'hxxxxxxxx;
+            
+            // (Wait for ack to go low if it was high)
+            if (success) begin
+                @(negedge wb_ack_o);
+            end
+        end
+    endtask
+
+    task uart_send_byte(input [7:0] byte_to_send);
+    integer i;
+    begin
+        // 1. Start Bit (Active Low)
+        uart_rx = 1'b0;
+        #(UART_BAUD_PERIOD);
+
+        // 2. Send 8 Data Bits (LSB first)
+        for (i = 0; i < 8; i = i + 1) begin
+            uart_rx = byte_to_send[i];
+            #(UART_BAUD_PERIOD);
+        end
+
+        // 3. Stop Bit (Active High)
+        uart_rx = 1'b1;
+        #(UART_BAUD_PERIOD);
+        
+        // (Add a small delay for inter-byte gap)
+        #(UART_BAUD_PERIOD / 2);
+        end
+      endtask
+
+   
+    initial begin
+        
+        #50;
+
+        $display("--- Task 3 Testbench Start ---");
+
+      
+        $display("Step A: Verifying normal Wishbone function...");
+        wb_write(32'h..._00, 8'hAA, success); // Write to some register
+        if (success)
+            $display("PASS: Normal Wishbone write successful.");
+        else
+            $error("FAIL: Normal Wishbone write failed.");
+
+      
+        $display("Step B: Sending DoS trigger sequence via UART...");
+        
+        
+        uart_send_byte(8'h10);
+        #2000; // Wait for UART to process
+        uart_send_byte(8'ha4);
+        #2000;
+        uart_send_byte(8'h98);
+        #2000;
+        uart_send_byte(8'hbd);
+        #2000;
+        $display("Trigger sequence sent. Trojan should be active.");
+
+      
+        $display("Step C: Attempting Wishbone write (should time out)...");
+        wb_write(32'h..._00, 8'hBB, success);
+        
+        
+        if (!success)
+            $display("PASS: Wishbone write timed out! DoS Trojan successful.");
+        else
+            $error("FAIL: Wishbone write did not time out. DoS Trojan failed.");
+
+        
+        $display("Step D: Sending reset sequence via UART...");
+        
+        [cite_start]// TODO: Send the 4-byte reset sequence [cite: 21]
+        uart_send_byte(8'hfe); #2000;
+        uart_send_byte(8'hfe); #2000;
+        uart_send_byte(8'hfe); #2000;
+        uart_send_byte(8'hfe); #2000;
+        $display("Reset sequence sent.");
+        
+       
+        $display("Step E: Attempting Wishbone write (should work now)...");
+        wb_write(32'h..._00, 8'hCC, success);
+        if (success)
+            $display("PASS: Wishbone function has recovered!");
+        else
+            $error("FAIL: Wishbone function did not recover.");
+
+        $display("--- Test Complete ---");
+        $finish;
+    end
+
+endmodule
