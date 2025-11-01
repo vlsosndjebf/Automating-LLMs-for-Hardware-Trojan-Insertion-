@@ -6,6 +6,23 @@ module tb_task_4_exploit;
     parameter WB_TIMEOUT_CYCLES = 1000;
   
     reg  [7:0] read_data;
+
+    initial begin
+            // Generate the main clock
+            clk = 0;
+            forever #(CLK_PERIOD / 2) clk = ~clk;
+        end
+    
+        initial begin
+            // Generate the initial reset pulse
+            rst = 1'b1;
+            uart_rx = 1'b1; // UART is idle high
+            // De-assert reset after 10 clock cycles
+            repeat(10) @(posedge clk);
+            rst = 1'b0;
+        end
+
+
     
     wb_uart_modified DUT (
         .clk(clk),
