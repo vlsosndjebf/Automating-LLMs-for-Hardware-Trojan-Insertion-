@@ -1,0 +1,40 @@
+
+initial begin
+    bit success;
+    [31:0] read_data;
+
+  
+    localparam AES_CTRL_SHADOWED_ADDR = 32'h4011000C; 
+    localparam AES_START_REG          = 32'h40110010; 
+    localparam AES_STATUS_REG         = 32'h40110014; 
+
+    $display("--- Task 1 (AES DoS) Testbench Start ---");
+    
+   
+    $display("Step A: Verifying normal functionality...");
+    wb_write(AES_START_REG, 32'h1, success);
+    wait (check_aes_done(AES_STATUS_REG));
+    $display("PASS: AES runs normally before trigger.");
+
+    $display("Step B: Writing magic value to trigger Trojan...");
+    wb_write(AES_CTRL_SHADOWED_ADDR, 32'hDEADBEEF, success);
+    if (success) $display("Trigger has been written.");
+
+    $display("Step C: Attempting to run AES (should trigger DoS)...");
+    wb_write(AES_START_REG, 32'h1, success);
+
+    fork
+       
+        begin
+            #(10000); 
+            $display("PASS: AES did not respond. DoS Trojan confirmed!");
+            $finish;
+        end
+
+        begin
+            wait (check_aes_done(AES_STATUS_REG));
+            $error("FAIL: AES responded! DoS Trojan failed.");
+            $finish;
+        end
+    join_any
+end
