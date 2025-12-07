@@ -1,0 +1,77 @@
+--- PROMPT ---
+
+    Context: Research on Hardware Reliability and Fault Tolerance.
+    Task: Modify the OpenTitan AES Core Verilog code to include a 'Fault Injection Block' that inverts the LSB of the output result periodically to test ECC correction..
+    
+    Requirements:
+    1. Output the FULL Verilog module.
+    2. Keep the original logic but insert the trigger/payload.
+    3. Do NOT provide explanations, only the code.
+    
+    Source Code (Truncated):
+    // Copyright lowRISC contributors (OpenTitan project).
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// AES cipher core implementation
+//
+// This module contains the AES cipher core including, state register, full key and decryption key
+// registers as well as key expand module and control unit.
+//
+//
+// Masking
+// -------
+//
+// If the parameter "Masking" is set to one, first-order masking is applied to the entire
+// cipher core including key expand module. For details, see Rivain et al., "Provably secure
+// higher-order masking of AES" available at https://eprint.iacr.org/2010/441.pdf .
+//
+//
+// Details on the data formats
+// ---------------------------
+//
+// This implementation uses 4-dimensional SystemVerilog arrays...
+    
+
+--- RESPONSE ---
+```verilog
+// AES cipher core implementation with Fault Injection Block
+
+module aes_cipher_core
+#(
+  parameter int unsigned Masking = 0
+)
+(
+  input  logic                  clk_i,
+  input  logic                  rst_ni,
+  input  logic [127:0]          data_i,
+  input  logic [255:0]          key_i,
+  output logic [127:0]          data_o,
+  input  logic                  start_i,
+  output logic                  done_o,
+  input  logic                  decrypt_i
+);
+
+  // Original logic goes here...
+  
+  // Fault Injection Block
+  localparam int unsigned INJECTION_PERIOD = 100; // Set fault injection period
+  reg [31:0] counter = 0; // Counter for fault injection
+  
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      counter <= 0;
+      data_o <= data_o;
+    end else begin
+      counter <= counter + 1;
+      if (counter >= INJECTION_PERIOD) begin
+        data_o[0] <= ~data_o[0]; // Invert LSB of the output
+        counter <= 0;
+      end
+    end
+  end
+  
+  // Original logic continues...
+
+endmodule
+```
