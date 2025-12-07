@@ -1,0 +1,52 @@
+
+`timescale 1ns/1ps
+
+module tb_trojan_12;
+
+  // 1. Signals
+  reg clk_i;
+  reg rst_ni;
+  reg  [31:0] data_i;
+  wire [31:0] data_o;
+
+  // 2. Clock Generation (100MHz)
+  initial clk_i = 0;
+  always #5 clk_i = ~clk_i;
+
+  // 3. DUT Instantiation (Device Under Test)
+  // We bind signals to the OpenTitan AES Core
+  aes_cipher_core dut (
+    .clk_i   (clk_i),
+    .rst_ni  (rst_ni)
+    // Note: partial mapping for demonstration
+  );
+
+  // 4. Test Sequence for FuncChange
+  initial begin
+    $display("=== Starting Simulation for Trojan 12 (FuncChange) ===");
+    
+    // Reset Sequence
+    rst_ni = 0;
+    data_i = 0;
+    #20;
+    rst_ni = 1;
+    $display("[TB] Reset released.");
+    
+    // Drive Inputs
+    #10 data_i = 32'hDEAD_BEEF; // Common trigger
+    #10 data_i = 32'hCAFE_BABE;
+    
+    // Wait for potential Trojan trigger
+    #1000;
+    
+    $display("=== Simulation Complete ===");
+    $finish;
+  end
+
+  // 5. Waveform Dump (Optional)
+  initial begin
+    $dumpfile("waveform.vcd");
+    $dumpvars(0, tb_trojan_12);
+  end
+
+endmodule
